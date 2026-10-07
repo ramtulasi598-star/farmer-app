@@ -1,0 +1,6 @@
+{
+  "name": "RythuSetu - Farmer Marketplace",
+  "description": "Direct Farmer-to-Marketplace mobile platform connecting farmers with markets, buyers, and marketers across India with real-time crop discovery, pre-booking, price history, and Telugu/English language support.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
