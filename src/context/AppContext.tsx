@@ -12,6 +12,9 @@ import {
   AppNotification,
   CancellationRecord,
   MarketRequirement,
+  CropGrade,
+  MarketArrivalImport,
+  MarketCycleEvent,
 } from '../types';
 import {
   INITIAL_USERS,
@@ -23,14 +26,31 @@ import {
   INITIAL_MESSAGES,
   INITIAL_NOTIFICATIONS,
 } from '../data/mockData';
+import {
+  MARKET_CYCLE_DURATION_SECONDS,
+  INITIAL_INWARD_ARRIVALS,
+  INITIAL_CYCLE_EVENTS,
+  execute8MinuteMarketCycle,
+} from '../utils/marketCycleEngine';
 import { translations } from '../i18n/translations';
 
 interface AppContextType {
   // Auth & User
   currentUser: User | null;
   setCurrentUser: (user: User | null) => void;
-  loginUser: (phone: string, role: Role, name: string, state: string, district: string, area: string) => void;
+  hasDownloadedApp: boolean;
+  loginUser: (
+    phone: string,
+    role: Role,
+    name: string,
+    state: string,
+    district: string,
+    area: string,
+    pincode?: string,
+    firstName?: string
+  ) => void;
   logoutUser: () => void;
+  resetDownloadOnboarding: () => void;
   switchRole: (role: Role) => void;
   
   // Localization
@@ -55,9 +75,23 @@ interface AppContextType {
   // Requests
   requests: CropRequest[];
   createCropRequest: (data: { cropId: string; requestedQuantity: number; offeredPrice: number; notes?: string }) => { success: boolean; error?: string; request?: CropRequest };
+  submitMarketSupplyRequest: (data: {
+    marketId: string;
+    marketName: string;
+    farmerName: string;
+    cropName: string;
+    quantity: number;
+    grade: CropGrade;
+    location: string;
+    expectedPrice: number;
+    cropId?: string;
+    notes?: string;
+    phone?: string;
+  }) => { success: boolean; error?: string; request?: CropRequest };
   acceptCropRequest: (requestId: string) => { success: boolean; error?: string; deal?: Deal };
   rejectCropRequest: (requestId: string, reason?: string) => void;
   expireCropRequest: (requestId: string) => void;
+  resendCropRequest: (requestId: string) => { success: boolean; error?: string };
   
   // Deals
   deals: Deal[];
@@ -81,6 +115,17 @@ interface AppContextType {
   markNotificationRead: (id: string) => void;
   markAllNotificationsRead: () => void;
   
+  // 8-Minute Market Timer & Cycle System (Requirement 3)
+  marketTimerSecondsLeft: number;
+  marketTimerTotalSeconds: number;
+  isMarketTimerActive: boolean;
+  toggleMarketTimer: () => void;
+  marketCycleCount: number;
+  lastMarketCycleAt: string;
+  marketCycleEvents: MarketCycleEvent[];
+  inwardArrivals: MarketArrivalImport[];
+  triggerMarketCycleUpdate: () => void;
+
   // UI Helpers
   activeTab: string;
   setActiveTab: (tab: string) => void;
@@ -97,16 +142,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return (localStorage.getItem('rythu_language') as Language) || 'en';
   });
 
+  const [hasDownloadedApp, setHasDownloadedAppState] = useState<boolean>(() => {
+    return localStorage.getItem('rythu_downloaded_app') === 'true';
+  });
+
   const [currentUser, setCurrentUserState] = useState<User | null>(() => {
+    // Check if app has been downloaded & registered before
+    const isDownloaded = localStorage.getItem('rythu_downloaded_app') === 'true';
     const saved = localStorage.getItem('rythu_user');
     if (saved) {
       try {
         return JSON.parse(saved);
       } catch {
-        return INITIAL_USERS[0];
+        return isDownloaded ? INITIAL_USERS[0] : null;
       }
     }
-    return INITIAL_USERS[0]; // Default logged-in as Farmer Ramesh Reddy for immediate demo
+    // If user has not downloaded/registered on this device yet, start with null so the 1-time download onboarding screen appears
+    if (!isDownloaded) {
+      return null;
+    }
+    return INITIAL_USERS[0]; // Default logged-in as Farmer Ramesh Reddy once downloaded
   });
 
   const [crops, setCrops] = useState<Crop[]>(() => {
@@ -114,13 +169,19 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     if (saved) {
       try {
         const parsed: Crop[] = JSON.parse(saved);
+        let merged = parsed;
         const missing = INITIAL_CROPS.filter(ic => !parsed.some(p => p.id === ic.id));
         if (missing.length > 0) {
-          const merged = [...parsed, ...missing];
-          localStorage.setItem('rythu_crops', JSON.stringify(merged));
-          return merged;
+          merged = [...parsed, ...missing];
         }
-        return parsed;
+        const updated = merged.map(c => {
+          const fresh = INITIAL_CROPS.find(ic => ic.id === c.id);
+          return fresh && fresh.currentMarketBuyingPrice
+            ? { ...c, currentMarketBuyingPrice: fresh.currentMarketBuyingPrice }
+            : c;
+        });
+        localStorage.setItem('rythu_crops', JSON.stringify(updated));
+        return updated;
       } catch {}
     }
     return INITIAL_CROPS;
@@ -198,6 +259,43 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [activeTab, setActiveTab] = useState<string>('home');
   const [isAudioSpeaking, setIsAudioSpeaking] = useState<boolean>(false);
 
+  // 8-Minute Market Timer & Cycle System State (Requirement 3)
+  const [marketTimerSecondsLeft, setMarketTimerSecondsLeft] = useState<number>(() => {
+    const saved = localStorage.getItem('rythu_market_timer');
+    if (saved) {
+      const num = parseInt(saved, 10);
+      if (!isNaN(num) && num > 0 && num <= MARKET_CYCLE_DURATION_SECONDS) return num;
+    }
+    return MARKET_CYCLE_DURATION_SECONDS; // 480 seconds (8 minutes)
+  });
+
+  const [isMarketTimerActive, setIsMarketTimerActive] = useState<boolean>(true);
+
+  const [marketCycleCount, setMarketCycleCount] = useState<number>(() => {
+    const saved = localStorage.getItem('rythu_market_cycle_count');
+    return saved ? parseInt(saved, 10) || 1 : 1;
+  });
+
+  const [lastMarketCycleAt, setLastMarketCycleAt] = useState<string>(() => {
+    return localStorage.getItem('rythu_last_market_cycle') || 'Just now (8-min cycle)';
+  });
+
+  const [marketCycleEvents, setMarketCycleEvents] = useState<MarketCycleEvent[]>(() => {
+    const saved = localStorage.getItem('rythu_cycle_events');
+    if (saved) {
+      try { return JSON.parse(saved); } catch {}
+    }
+    return INITIAL_CYCLE_EVENTS;
+  });
+
+  const [inwardArrivals, setInwardArrivals] = useState<MarketArrivalImport[]>(() => {
+    const saved = localStorage.getItem('rythu_inward_arrivals');
+    if (saved) {
+      try { return JSON.parse(saved); } catch {}
+    }
+    return INITIAL_INWARD_ARRIVALS;
+  });
+
   // Sync to localStorage
   useEffect(() => {
     localStorage.setItem('rythu_language', language);
@@ -243,6 +341,26 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     localStorage.setItem('rythu_cancellations', JSON.stringify(cancellations));
   }, [cancellations]);
 
+  useEffect(() => {
+    localStorage.setItem('rythu_market_timer', marketTimerSecondsLeft.toString());
+  }, [marketTimerSecondsLeft]);
+
+  useEffect(() => {
+    localStorage.setItem('rythu_market_cycle_count', marketCycleCount.toString());
+  }, [marketCycleCount]);
+
+  useEffect(() => {
+    localStorage.setItem('rythu_last_market_cycle', lastMarketCycleAt);
+  }, [lastMarketCycleAt]);
+
+  useEffect(() => {
+    localStorage.setItem('rythu_cycle_events', JSON.stringify(marketCycleEvents));
+  }, [marketCycleEvents]);
+
+  useEffect(() => {
+    localStorage.setItem('rythu_inward_arrivals', JSON.stringify(inwardArrivals));
+  }, [inwardArrivals]);
+
   // Translation helper
   const t = (key: string): string => {
     const langDict = translations[language] || translations.en;
@@ -257,28 +375,63 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setCurrentUserState(user);
   };
 
-  const loginUser = (phone: string, role: Role, name: string, state: string, district: string, area: string) => {
+  const loginUser = (
+    phone: string,
+    role: Role,
+    name: string,
+    state: string,
+    district: string,
+    area: string,
+    pincode?: string,
+    firstName?: string
+  ) => {
     // Check if user exists in initial users
     const existing = INITIAL_USERS.find(u => u.phone === phone);
     if (existing) {
-      setCurrentUserState(existing);
+      const updatedExisting: User = {
+        ...existing,
+        role,
+        name: name.trim() || existing.name,
+        firstName: firstName?.trim() || existing.firstName || name.trim().split(' ')[0],
+        state: state || existing.state,
+        district: district || existing.district,
+        area: area || existing.area,
+        pincode: pincode || existing.pincode || '517325',
+      };
+      setCurrentUserState(updatedExisting);
+      localStorage.setItem('rythu_user', JSON.stringify(updatedExisting));
+      localStorage.setItem('rythu_downloaded_app', 'true');
+      setHasDownloadedAppState(true);
       return;
     }
+    const derivedFirstName = firstName?.trim() || name.trim().split(' ')[0] || (role === 'FARMER' ? 'Kisan' : 'Trader');
     const newUser: User = {
       id: `user_${Date.now()}`,
       name: name.trim() || (role === 'FARMER' ? 'Kisan Bandhu' : 'Trader Partner'),
+      firstName: derivedFirstName,
       phone,
       role,
       state: state || 'Andhra Pradesh',
       district: district || 'Chittoor',
       area: area || 'Market Area',
+      pincode: pincode || '517325',
       verified: true,
       followedMarketIds: ['mkt_madanapalle'],
     };
     setCurrentUserState(newUser);
+    localStorage.setItem('rythu_user', JSON.stringify(newUser));
+    localStorage.setItem('rythu_downloaded_app', 'true');
+    setHasDownloadedAppState(true);
   };
 
   const logoutUser = () => {
+    setCurrentUserState(null);
+  };
+
+  const resetDownloadOnboarding = () => {
+    localStorage.removeItem('rythu_downloaded_app');
+    localStorage.removeItem('rythu_user');
+    setHasDownloadedAppState(false);
     setCurrentUserState(null);
   };
 
@@ -528,7 +681,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     }
 
     const now = new Date();
-    const expiry = new Date(now.getTime() + 60 * 60 * 1000); // 1-hour response window
+    // Farmer to Buyer requests have a 24-hour response window; Farmer to Market requests have a 1-hour window
+    const expiry = new Date(now.getTime() + 24 * 60 * 60 * 1000); // 24-hour response window
 
     const newRequest: CropRequest = {
       id: `req_${Date.now()}`,
@@ -563,16 +717,152 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     // Notify farmer
     addNotification({
       userId: crop.farmerId,
-      title: 'New Booking Request',
-      titleTelugu: 'కొత్త కొనుగోలు అభ్యర్థన',
-      message: `${newRequest.buyerName} requested ${requestedQuantity} kg of ${crop.cropName} @ ₹${offeredPrice}/kg. 1 hour response window!`,
-      messageTelugu: `${newRequest.buyerName} ${requestedQuantity} కిలోల ${crop.cropName} @ ₹${offeredPrice}/కిలో అభ్యర్థించారు.`,
+      title: 'New Booking Request (24h Window)',
+      titleTelugu: 'కొత్త కొనుగోలు అభ్యర్థన (24 గంటల గడువు)',
+      message: `${newRequest.buyerName} requested ${requestedQuantity} kg of ${crop.cropName} @ ₹${offeredPrice}/kg. 24 hours response window!`,
+      messageTelugu: `${newRequest.buyerName} ${requestedQuantity} కిలోల ${crop.cropName} @ ₹${offeredPrice}/కిలో అభ్యర్థించారు (24 గంటల గడువు).`,
       type: 'NEW_REQUEST',
       relatedId: newRequest.id,
     });
 
     // Create chat conversation
     getOrCreateConversation(crop.farmerId, newRequest.buyerId, cropId);
+
+    return { success: true, request: newRequest };
+  };
+
+  const submitMarketSupplyRequest = (data: {
+    marketId: string;
+    marketName: string;
+    farmerName: string;
+    cropName: string;
+    quantity: number;
+    grade: CropGrade;
+    location: string;
+    expectedPrice: number;
+    cropId?: string;
+    notes?: string;
+    phone?: string;
+  }) => {
+    if (!data.farmerName.trim()) {
+      return { success: false, error: 'Farmer name is required.' };
+    }
+    if (!data.cropName.trim()) {
+      return { success: false, error: 'Crop name is required.' };
+    }
+    if (data.quantity <= 0) {
+      return { success: false, error: 'Quantity must be greater than 0 kg.' };
+    }
+    if (data.expectedPrice <= 0) {
+      return { success: false, error: 'Price must be greater than ₹0/kg.' };
+    }
+    if (!data.location.trim()) {
+      return { success: false, error: 'Location is required.' };
+    }
+
+    let linkedCropId = data.cropId;
+    let referencedCrop = linkedCropId ? crops.find(c => c.id === linkedCropId) : undefined;
+
+    // If farmer selected an existing crop, validate available quantity
+    if (referencedCrop) {
+      if (data.quantity > referencedCrop.remainingQuantity) {
+        return {
+          success: false,
+          error: `Cannot supply more than available quantity (${referencedCrop.remainingQuantity} kg available).`,
+        };
+      }
+    } else {
+      // If farmer is supplying a crop not yet in their listings, auto-create crop listing
+      const newCropId = `crop_supply_${Date.now()}`;
+      linkedCropId = newCropId;
+      const createdCrop: Crop = {
+        id: newCropId,
+        farmerId: currentUser?.id || 'user_farmer_1',
+        farmerName: data.farmerName,
+        farmerPhone: data.phone || currentUser?.phone || '9848012345',
+        cropName: data.cropName,
+        variety: 'Local Farm Fresh',
+        cropCategory: data.cropName.split(' ')[0],
+        totalQuantity: data.quantity,
+        preBookedQuantity: data.quantity,
+        soldQuantity: 0,
+        remainingQuantity: 0,
+        unit: 'kg',
+        grade: data.grade,
+        expectedPrice: data.expectedPrice,
+        location: data.location,
+        district: currentUser?.district || 'Chittoor',
+        state: currentUser?.state || 'Andhra Pradesh',
+        photos: [
+          'https://images.unsplash.com/photo-1592924357228-91a4daadcfea?auto=format&fit=crop&w=800&q=80',
+        ],
+        description: `Direct market supply offer for ${data.marketName}. Grade ${data.grade}. ${data.notes || ''}`,
+        harvestDate: new Date().toISOString().split('T')[0],
+        status: 'REQUEST RECEIVED',
+        createdAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        updatedAt: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+        editHistory: [],
+      };
+      setCrops(prev => [createdCrop, ...prev]);
+      referencedCrop = createdCrop;
+    }
+
+    const now = new Date();
+    const expiry = new Date(now.getTime() + 60 * 60 * 1000); // 1-hour response rule
+
+    const targetMarket = markets.find(m => m.id === data.marketId);
+    const buyerId = targetMarket?.verifiedBuyerIds[0] || 'user_buyer_1';
+
+    const newRequest: CropRequest = {
+      id: `req_supply_${Date.now()}`,
+      cropId: linkedCropId || 'crop_generic',
+      cropName: data.cropName,
+      grade: data.grade,
+      farmerId: currentUser?.id || 'user_farmer_1',
+      farmerName: data.farmerName,
+      farmerPhone: data.phone || currentUser?.phone || '9848012345',
+      farmerLocation: data.location,
+      buyerId,
+      buyerName: `${data.marketName} Procurement Desk`,
+      buyerPhone: targetMarket?.contactNumber || '9440167890',
+      buyerMarketName: data.marketName,
+      buyerVerified: true,
+      requestedQuantity: data.quantity,
+      offeredPrice: data.expectedPrice,
+      notes: data.notes,
+      createdAt: now.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
+      expiresAt: expiry.toISOString(),
+      status: 'PENDING',
+      sourceType: 'FARMER_SUPPLY_OFFER',
+      marketId: data.marketId,
+    };
+
+    setRequests(prev => [newRequest, ...prev]);
+
+    // Send notification to farmer
+    addNotification({
+      userId: currentUser?.id || 'user_farmer_1',
+      title: 'Supply Request Submitted',
+      titleTelugu: 'మార్కెట్‌కు పంట సరఫరా అభ్యర్థన పంపబడింది',
+      message: `Your supply request for ${data.quantity} kg of ${data.cropName} (Grade ${data.grade}) @ ₹${data.expectedPrice}/kg has been sent to ${data.marketName}. ⏱ Market should respond within 1 hour.`,
+      messageTelugu: `${data.marketName} మార్కెట్‌కు ${data.quantity} కిలోల ${data.cropName} సరఫరా అభ్యర్థన పంపబడింది.`,
+      type: 'NEW_REQUEST',
+      relatedId: newRequest.id,
+    });
+
+    // Also send notification to buyer
+    addNotification({
+      userId: buyerId,
+      title: 'New Farmer Supply Offer',
+      titleTelugu: 'కొత్త రైతు పంట సరఫరా ప్రతిపాదన',
+      message: `${data.farmerName} from ${data.location} offered to supply ${data.quantity} kg of ${data.cropName} (Grade ${data.grade}) @ ₹${data.expectedPrice}/kg.`,
+      messageTelugu: `${data.farmerName} ${data.quantity} కిలోల ${data.cropName} సరఫరా చేయడానికి సిద్ధంగా ఉన్నారు.`,
+      type: 'NEW_REQUEST',
+      relatedId: newRequest.id,
+    });
+
+    // Create chat conversation
+    getOrCreateConversation(currentUser?.id || 'user_farmer_1', buyerId, linkedCropId || 'crop_generic');
 
     return { success: true, request: newRequest };
   };
@@ -694,15 +984,58 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       prev.map(r => (r.id === requestId ? { ...r, status: 'EXPIRED' } : r))
     );
 
+    const isMarketSupply = req.sourceType === 'FARMER_SUPPLY_OFFER';
+
     addNotification({
       userId: req.farmerId,
-      title: 'Request Window Expired',
-      titleTelugu: 'స్పందన గడువు ముగిసింది',
-      message: `Booking request for ${req.cropName} has expired as the 1-hour window elapsed.`,
-      messageTelugu: `${req.cropName} కొనుగోలు అభ్యర్థన గడువు ముగిసింది.`,
+      title: isMarketSupply ? 'Market Request Expired (1h)' : 'Booking Request Expired (24h)',
+      titleTelugu: isMarketSupply ? 'మార్కెట్ అభ్యర్థన గడువు ముగిసింది (1 గంట)' : 'కొనుగోలు అభ్యర్థన గడువు ముగిసింది (24 గంటలు)',
+      message: isMarketSupply
+        ? `Supply request to ${req.buyerMarketName} has expired as the 1-hour market response window elapsed.`
+        : `Booking request for ${req.cropName} has expired as the 24-hour response window elapsed.`,
+      messageTelugu: isMarketSupply
+        ? `${req.buyerMarketName} మార్కెట్ సరఫరా అభ్యర్థన 1 గంట గడువు ముగిసింది.`
+        : `${req.cropName} కొనుగోలు అభ్యర్థన 24 గంటల గడువు ముగిసింది.`,
       type: 'REQUEST_EXPIRED',
       relatedId: req.id,
     });
+  };
+
+  const resendCropRequest = (requestId: string) => {
+    const req = requests.find(r => r.id === requestId);
+    if (!req) return { success: false, error: 'Request not found' };
+
+    setRequests(prev =>
+      prev.map(r =>
+        r.id === requestId
+          ? {
+              ...r,
+              status: 'PENDING',
+              createdAt: 'Just now',
+              createdMinutesAgo: 0,
+              rejectionReason: undefined,
+            }
+          : r
+      )
+    );
+
+    const isMarketSupply = req.sourceType === 'FARMER_SUPPLY_OFFER';
+
+    addNotification({
+      userId: req.farmerId,
+      title: isMarketSupply ? 'Market Request Re-sent (1h Window Reset)' : 'Booking Request Re-sent (24h Window Reset)',
+      titleTelugu: isMarketSupply ? 'మార్కెట్ అభ్యర్థన మళ్లీ పంపబడింది (1 గం.)' : 'కొనుగోలు అభ్యర్థన మళ్లీ పంపబడింది (24 గం.)',
+      message: isMarketSupply
+        ? `Supply request for ${req.cropName} re-sent to ${req.buyerMarketName}. 1-hour market response window active!`
+        : `${req.buyerName} renewed booking request for ${req.requestedQuantity} kg ${req.cropName} @ ₹${req.offeredPrice}/kg. 24-hour response window active!`,
+      messageTelugu: isMarketSupply
+        ? `${req.buyerMarketName} మార్కెట్‌కు 1 గంట గడువుతో అభ్యర్థన మళ్లీ పంపబడింది.`
+        : `${req.buyerName} ${req.requestedQuantity} కిలోల ${req.cropName} కోసం 24 గంటల గడువుతో అభ్యర్థనను మళ్లీ పంపారు.`,
+      type: 'NEW_REQUEST',
+      relatedId: req.id,
+    });
+
+    return { success: true };
   };
 
   const getDealById = (dealId: string) => deals.find(d => d.id === dealId);
@@ -910,8 +1243,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
             : '⭐ Crop Grade Standards:\n• Grade A: Premium export quality, uniform size, firm fruit, long shelf-life.\n• Grade B: Good standard quality for domestic retail.\n• Grade C: Standard processing quality for ketchup/puree factories.';
         } else if (lower.includes('book') || lower.includes('request') || lower.includes('బుకింగ్') || lower.includes('డీల్')) {
           reply = language === 'te'
-            ? '🤝 ప్రీ-బుకింగ్ విధానం:\nకొనుగోలుదారు అభ్యర్థన పంపినప్పుడు మీకు 1 గంట సమయం ఉంటుంది. మీరు అంగీకరిస్తే పరిమాణం లాక్ చేయబడుతుంది. డీల్ ఖరారైన పత్రం స్లిప్ జారీ అవుతుంది.'
-            : '🤝 Pre-Booking Guidelines:\nWhen a buyer sends a booking request, you have 1 hour to review & accept. Once accepted, quantity is safely pre-booked and locked.';
+            ? '🤝 ప్రీ-బుకింగ్ & సరఫరా నిబంధనలు:\n• రైతు నుండి మార్కెట్‌కు సరఫరా అభ్యర్థన: 1 గంట స్పందన సమయం (1-Hour Rule).\n• రైతు నుండి కొనుగోలుదారుకు బుకింగ్ డీల్: 24 గంటల స్పందన సమయం (24-Hour Rule).'
+            : '🤝 Pre-Booking & Supply Guidelines:\n• Farmer to Market supply request has a 1-hour response window.\n• Farmer to Buyer booking request has a 24-hour response window.';
         } else {
           reply = language === 'te'
             ? `నమస్కారం ${currentUser.name} గారు! మీ సందేశం తెలిసింది. మీకు ఏ పంట మార్కెట్ సమాచారం లేదా గ్రేడింగ్ సలహా కావాలో అడగండి.`
@@ -983,13 +1316,83 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setIsAudioSpeaking(false);
   };
 
+  // 8-Minute Market Timer & Cycle System Engine (Requirement 3)
+  const triggerMarketCycleUpdate = () => {
+    const nextCycle = marketCycleCount + 1;
+    setMarketCycleCount(nextCycle);
+    const nowTimeStr = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    setLastMarketCycleAt(nowTimeStr);
+    setMarketTimerSecondsLeft(MARKET_CYCLE_DURATION_SECONDS);
+
+    const result = execute8MinuteMarketCycle(markets, nextCycle, language);
+
+    setMarkets(result.updatedMarkets);
+    setInwardArrivals(prev => [...result.newArrivals, ...prev].slice(0, 20));
+    setMarketCycleEvents(prev => [...result.newEvents, ...prev].slice(0, 30));
+
+    // Synchronize farmer crops benchmark market buying price with updated market prices
+    // NOTE: Strictly respect rule: "the prices only changed by only market not by farmer"
+    // Farmer's own crop asking price (expectedPrice) is NEVER mutated!
+    setCrops(prevCrops =>
+      prevCrops.map(crop => {
+        const matchingMkt = result.updatedMarkets.find(m =>
+          m.cropsRequired.some(r => r.cropName.toLowerCase().includes(crop.cropCategory.toLowerCase()))
+        );
+        const req = matchingMkt?.cropsRequired.find(r =>
+          r.cropName.toLowerCase().includes(crop.cropCategory.toLowerCase())
+        );
+        if (req) {
+          return {
+            ...crop,
+            currentMarketBuyingPrice: req.buyingPrice,
+          };
+        }
+        return crop;
+      })
+    );
+
+    // Send in-app notification
+    addNotification({
+      userId: currentUser?.id || 'all',
+      title: '⏱️ 8-Min Mandi Rate & Inward Refresh',
+      titleTelugu: '⏱️ 8 నిమిషాల మార్కెట్ ధరలు & దిగుమతులు అప్‌డేట్',
+      message: result.summaryMessage,
+      messageTelugu: result.summaryMessageTelugu,
+      type: 'MARKET_ALERT',
+    });
+  };
+
+  const toggleMarketTimer = () => {
+    setIsMarketTimerActive(prev => !prev);
+  };
+
+  // 1-Second Interval Ticker for 8-Minute Countdown
+  useEffect(() => {
+    if (!isMarketTimerActive) return;
+
+    const interval = setInterval(() => {
+      setMarketTimerSecondsLeft(prev => {
+        if (prev <= 1) {
+          // Timer reached 0: execute 8-minute cycle update!
+          triggerMarketCycleUpdate();
+          return MARKET_CYCLE_DURATION_SECONDS;
+        }
+        return prev - 1;
+      });
+    }, 1000);
+
+    return () => clearInterval(interval);
+  }, [isMarketTimerActive, marketCycleCount, markets, language, currentUser]);
+
   return (
     <AppContext.Provider
       value={{
         currentUser,
         setCurrentUser,
+        hasDownloadedApp,
         loginUser,
         logoutUser,
+        resetDownloadOnboarding,
         switchRole,
         language,
         setLanguage,
@@ -1006,9 +1409,11 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         addMarketRequirement,
         requests,
         createCropRequest,
+        submitMarketSupplyRequest,
         acceptCropRequest,
         rejectCropRequest,
         expireCropRequest,
+        resendCropRequest,
         deals,
         getDealById,
         cancellations,
@@ -1023,6 +1428,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         unreadNotificationsCount,
         markNotificationRead,
         markAllNotificationsRead,
+        marketTimerSecondsLeft,
+        marketTimerTotalSeconds: MARKET_CYCLE_DURATION_SECONDS,
+        isMarketTimerActive,
+        toggleMarketTimer,
+        marketCycleCount,
+        lastMarketCycleAt,
+        marketCycleEvents,
+        inwardArrivals,
+        triggerMarketCycleUpdate,
         activeTab,
         setActiveTab,
         isAudioSpeaking,

@@ -45,17 +45,59 @@ export const DealSlipModal: React.FC<DealSlipModalProps> = ({
 
         {/* Slip Body */}
         <div className="p-4 space-y-4 max-h-[75vh] overflow-y-auto text-stone-200 text-sm">
-          {/* Status Badge */}
-          <div className="flex items-center justify-between p-2.5 rounded-xl bg-stone-800/80 border border-stone-700">
-            <div>
-              <span className="text-xs text-stone-400">Deal Status</span>
-              <p className={`font-bold text-sm ${deal.status === 'CANCELLED' ? 'text-rose-400' : 'text-emerald-400'}`}>
-                {deal.status === 'CANCELLED' ? '❌ ' + t('statusCancelled') : '✅ ' + t('statusDealConfirmed')}
-              </p>
+          {/* Status Badge & 9-Step Transaction Workflow (Requirement 15) */}
+          <div className="p-3.5 rounded-2xl bg-stone-850/80 border border-stone-700/80 space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <span className="text-[10px] uppercase font-bold text-stone-400 block tracking-wider">
+                  Transaction Workflow Status
+                </span>
+                <p className={`font-black text-sm mt-0.5 ${deal.status === 'CANCELLED' ? 'text-rose-400' : 'text-emerald-400'}`}>
+                  {deal.status === 'CANCELLED' ? '🔴 Cancelled' : '🟢 Deal Confirmed (Stage 5 of 9)'}
+                </p>
+              </div>
+              <div className="text-right">
+                <span className="text-[10px] text-stone-400 block font-mono">{deal.createdAt}</span>
+                <span className="text-[9px] bg-stone-900 text-emerald-300 font-bold px-2 py-0.5 rounded border border-emerald-500/30">
+                  🔒 {deal.quantity} kg Reserved
+                </span>
+              </div>
             </div>
-            <div className="text-right">
-              <span className="text-xs text-stone-400">{t('dealDate')}</span>
-              <p className="text-xs font-medium text-stone-300">{deal.createdAt}</p>
+
+            {/* 9-Step Deal Status Timeline Visualizer (Requirement 15) */}
+            <div className="pt-2 border-t border-stone-750 space-y-1.5">
+              <span className="text-[9px] font-bold uppercase text-stone-400 tracking-wider block">
+                9-Step Fulfillment Roadmap:
+              </span>
+              <div className="grid grid-cols-3 sm:grid-cols-5 gap-1.5 text-[9px] text-center font-semibold">
+                <span className="p-1 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                  1. Sent ✓
+                </span>
+                <span className="p-1 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                  2. Received ✓
+                </span>
+                <span className="p-1 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                  3. Accepted ✓
+                </span>
+                <span className="p-1 rounded bg-emerald-500/20 text-emerald-300 border border-emerald-500/40">
+                  4. Reserved ✓
+                </span>
+                <span className="p-1 rounded bg-emerald-500 text-stone-950 font-black shadow">
+                  5. Confirmed ★
+                </span>
+                <span className="p-1 rounded bg-stone-900 text-stone-400 border border-stone-800">
+                  6. Pickup
+                </span>
+                <span className="p-1 rounded bg-stone-900 text-stone-400 border border-stone-800">
+                  7. Handover
+                </span>
+                <span className="p-1 rounded bg-stone-900 text-stone-400 border border-stone-800">
+                  8. Payment
+                </span>
+                <span className="p-1 rounded bg-stone-900 text-stone-400 border border-stone-800">
+                  9. Complete
+                </span>
+              </div>
             </div>
           </div>
 
@@ -99,35 +141,45 @@ export const DealSlipModal: React.FC<DealSlipModalProps> = ({
             </div>
           </div>
 
-          {/* Farmer & Buyer Cards */}
+          {/* Farmer & Buyer Cards (Requirement 18: Trust Indicators) */}
           <div className="grid grid-cols-1 sm:grid-cols-2 gap-2.5">
             {/* Farmer Card */}
-            <div className="p-3 rounded-xl bg-stone-800/40 border border-stone-700/50">
-              <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">
-                👨‍🌾 {t('farmerDetails')}
-              </span>
+            <div className="p-3 rounded-xl bg-stone-800/40 border border-stone-700/50 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">
+                  👨‍🌾 {t('farmerDetails')}
+                </span>
+                <span className="text-[9px] bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.2 rounded font-bold">
+                  🟢 Verified Farmer
+                </span>
+              </div>
               <p className="font-bold text-white mt-0.5">{deal.farmerName}</p>
-              <div className="flex items-center gap-1 text-[11px] text-stone-400 mt-1">
+              <div className="flex items-center gap-1 text-[11px] text-stone-400">
                 <Phone className="w-3 h-3 text-stone-500" />
                 <span>+91 {deal.farmerPhone}</span>
               </div>
-              <div className="flex items-start gap-1 text-[11px] text-stone-400 mt-1">
+              <div className="flex items-start gap-1 text-[11px] text-stone-400">
                 <MapPin className="w-3 h-3 text-stone-500 mt-0.5 shrink-0" />
                 <span className="line-clamp-2">{deal.farmerLocation}</span>
               </div>
             </div>
 
             {/* Buyer Card */}
-            <div className="p-3 rounded-xl bg-stone-800/40 border border-stone-700/50">
-              <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">
-                🏢 {t('buyerDetails')}
-              </span>
+            <div className="p-3 rounded-xl bg-stone-800/40 border border-stone-700/50 space-y-1">
+              <div className="flex items-center justify-between">
+                <span className="text-[10px] font-bold text-stone-400 uppercase tracking-wider">
+                  🏢 {t('buyerDetails')}
+                </span>
+                <span className="text-[9px] bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 px-1.5 py-0.2 rounded font-bold">
+                  🟢 Verified Buyer
+                </span>
+              </div>
               <p className="font-bold text-white mt-0.5">{deal.buyerName}</p>
-              <div className="flex items-center gap-1 text-[11px] text-stone-400 mt-1">
+              <div className="flex items-center gap-1 text-[11px] text-stone-400">
                 <Building2 className="w-3 h-3 text-stone-500" />
                 <span className="truncate">{deal.buyerMarket}</span>
               </div>
-              <div className="flex items-center gap-1 text-[11px] text-stone-400 mt-1">
+              <div className="flex items-center gap-1 text-[11px] text-stone-400">
                 <Phone className="w-3 h-3 text-stone-500" />
                 <span>+91 {deal.buyerPhone}</span>
               </div>

@@ -7,6 +7,7 @@ import { LanguageModal } from './components/LanguageModal';
 import { DealSlipModal } from './components/DealSlipModal';
 import { CancellationModal } from './components/CancellationModal';
 import { CropVideoModal } from './components/CropVideoModal';
+import { WhatHappensAfterTimerModal } from './components/WhatHappensAfterTimerModal';
 
 // Pages
 import { AuthPage } from './pages/AuthPage';
@@ -29,6 +30,8 @@ function MainApp() {
     getDealById,
     crops,
     deals,
+    logoutUser,
+    resetDownloadOnboarding,
   } = useApp();
 
   // Navigation states
@@ -42,11 +45,12 @@ function MainApp() {
   // Drawers & Modals
   const [isNotificationOpen, setIsNotificationOpen] = useState(false);
   const [isLanguageModalOpen, setIsLanguageModalOpen] = useState(false);
+  const [isTimerDetailsOpen, setIsTimerDetailsOpen] = useState(false);
 
   // Desktop view toggle: mobile framed vs full-width
   const [isMobileFramed, setIsMobileFramed] = useState(true);
 
-  // If user is not logged in, show Auth / Welcome flow
+  // If user is not logged in, show Auth / Welcome flow (App download & 1-time setup)
   if (!currentUser) {
     return <AuthPage onLoginSuccess={() => setActiveTab('home')} />;
   }
@@ -62,11 +66,22 @@ function MainApp() {
           <span className="font-semibold text-stone-300">RythuSetu Mobile Framework Active</span>
           <span>•</span>
           <span>Role: <strong className="text-white">{currentUser.role} ({currentUser.name})</strong></span>
+          <span className="bg-emerald-950 text-emerald-400 border border-emerald-500/40 text-[9px] font-bold px-1.5 py-0.2 rounded-full uppercase tracking-wider">
+            Device Logged In (1-Time Setup Complete)
+          </span>
         </div>
         <div className="flex items-center gap-2">
           <button
+            onClick={resetDownloadOnboarding}
+            className="flex items-center gap-1 bg-emerald-950 hover:bg-emerald-900 border border-emerald-500/40 text-emerald-300 px-2.5 py-0.5 rounded text-[11px] transition font-medium cursor-pointer"
+            title="Simulate a fresh mobile app download and experience the 1-time OTP registration flow"
+          >
+            <span>📱</span>
+            <span>Simulate Fresh App Download (1-Time Setup)</span>
+          </button>
+          <button
             onClick={() => setIsMobileFramed(!isMobileFramed)}
-            className="flex items-center gap-1 bg-stone-800 hover:bg-stone-700 text-stone-200 px-2 py-0.5 rounded text-[11px] transition font-medium"
+            className="flex items-center gap-1 bg-stone-800 hover:bg-stone-700 text-stone-200 px-2 py-0.5 rounded text-[11px] transition font-medium cursor-pointer"
           >
             {isMobileFramed ? <Monitor className="w-3 h-3 text-emerald-400" /> : <Smartphone className="w-3 h-3 text-emerald-400" />}
             <span>{isMobileFramed ? 'Full Responsive View' : 'Mobile Frame Preview'}</span>
@@ -98,6 +113,7 @@ function MainApp() {
         <Navbar
           onOpenNotifications={() => setIsNotificationOpen(true)}
           onSelectLanguage={() => setIsLanguageModalOpen(true)}
+          onOpenTimerDetails={() => setIsTimerDetailsOpen(true)}
         />
 
         {/* Main Body Routing */}
@@ -253,6 +269,12 @@ function MainApp() {
             setSelectedCropId(c.id);
             setVideoModalCrop(null);
           }}
+        />
+
+        {/* 8-Minute Market Timer "What Happens After Timer" Explainer Modal */}
+        <WhatHappensAfterTimerModal
+          isOpen={isTimerDetailsOpen}
+          onClose={() => setIsTimerDetailsOpen(false)}
         />
       </div>
     </div>

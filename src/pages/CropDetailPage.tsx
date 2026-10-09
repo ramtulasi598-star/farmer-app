@@ -18,7 +18,17 @@ import {
   Check,
   X,
   FileText,
+  Star,
+  Truck,
+  Lock,
+  RefreshCw,
 } from 'lucide-react';
+import {
+  getCropEmoji,
+  getSpecificCropDisplay,
+  getMarketBuyingPriceForCrop,
+} from '../utils/marketHelpers';
+import { TransportNetReturnModal } from '../components/TransportNetReturnModal';
 
 interface CropDetailPageProps {
   cropId: string;
@@ -38,6 +48,7 @@ export const CropDetailPage: React.FC<CropDetailPageProps> = ({
   const {
     getCropById,
     currentUser,
+    markets,
     requests,
     deals,
     updateCrop,
@@ -46,13 +57,17 @@ export const CropDetailPage: React.FC<CropDetailPageProps> = ({
     acceptCropRequest,
     rejectCropRequest,
     expireCropRequest,
+    resendCropRequest,
     t,
+    language,
   } = useApp();
 
   const crop = getCropById(cropId);
 
   const [activeTab, setActiveTab] = useState<'OVERVIEW' | 'REQUESTS' | 'HISTORY'>('OVERVIEW');
   const [showEditModal, setShowEditModal] = useState(false);
+  const [showTransportModal, setShowTransportModal] = useState(false);
+  const [toastMessage, setToastMessage] = useState<string | null>(null);
 
   // Edit fields
   const [editPrice, setEditPrice] = useState<number>(crop?.expectedPrice || 32);
@@ -185,42 +200,155 @@ export const CropDetailPage: React.FC<CropDetailPageProps> = ({
           </div>
 
           <div className="absolute bottom-3 left-4 right-4 flex items-end justify-between">
-            <div>
-              <h2 className="text-lg font-black text-white leading-tight">{crop.cropName}</h2>
+            <div className="min-w-0 pr-2">
+              <h2 className="text-lg font-black text-white leading-tight flex items-center gap-1.5 truncate">
+                <span>{getCropEmoji(crop.cropName)}</span>
+                <span>{getSpecificCropDisplay(crop.cropName, crop.variety).mainName}</span>
+              </h2>
+              {getSpecificCropDisplay(crop.cropName, crop.variety).varietyText && (
+                <p className="text-[11px] text-amber-300 font-semibold truncate ml-6">
+                  {getSpecificCropDisplay(crop.cropName, crop.variety).varietyText}
+                </p>
+              )}
               <div className="flex items-center gap-1 text-[11px] text-stone-300 mt-0.5">
                 <MapPin className="w-3 h-3 text-emerald-400" />
                 <span>{crop.location}</span>
               </div>
             </div>
-            <div className="text-right">
-              <span className="text-[10px] text-stone-400 block">Expected Rate</span>
-              <span className="text-xl font-black text-emerald-400 leading-none">
-                ₹{crop.expectedPrice}/kg
-              </span>
-            </div>
           </div>
         </div>
 
-        {/* Real-Time Quantity Gauge (Section 8) */}
+        {/* Clear Price Separation Block (Requirement 1) */}
+        <div className="px-4 pt-1">
+          <div className="grid grid-cols-2 gap-2 p-3 rounded-2xl bg-stone-950 border border-stone-850">
+            <div className="p-2.5 rounded-xl bg-stone-900 border border-stone-800">
+              <span className="text-[9px] uppercase font-extrabold text-stone-400 tracking-wider block">
+                {language === 'te' ? 'రైతు ఆశించిన ధర' : "FARMER'S EXPECTED PRICE"}
+              </span>
+              <p className="text-lg font-black text-emerald-400 mt-0.5">
+                ₹{crop.expectedPrice}<span className="text-xs font-normal text-stone-400">/kg</span>
+              </p>
+              <span className="text-[9px] text-stone-500 block">Set by farmer</span>
+            </div>
+
+            {/* Right: CURRENT MARKET BUYING PRICE */}
+            {(() => {
+              const marketBuyingPrice = getMarketBuyingPriceForCrop(crop, markets);
+              const isLower = marketBuyingPrice < crop.expectedPrice;
+              const isHigher = marketBuyingPrice > crop.expectedPrice;
+              return (
+                <div className="p-2.5 rounded-xl bg-amber-950/30 border border-amber-500/40">
+                  <span className="text-[9px] uppercase font-extrabold text-amber-300 tracking-wider block">
+                    {language === 'te' ? 'మార్కెట్ కొనుగోలు ధర' : 'CURRENT MARKET BUYING PRICE'}
+                  </span>
+                  <p className="text-lg font-black text-amber-400 mt-0.5">
+                    ₹{marketBuyingPrice}<span className="text-xs font-normal text-stone-400">/kg</span>
+                  </p>
+                  <span className="text-[9px] block mt-0.5 font-bold">
+                    {isHigher ? (
+                      <span className="text-emerald-400">
+                        ▲ +₹{marketBuyingPrice - crop.expectedPrice}/kg higher in Mandi
+                      </span>
+                    ) : isLower ? (
+                      <span className="text-rose-400">
+                        ▼ -₹{crop.expectedPrice - marketBuyingPrice}/kg lower than asking price
+                      </span>
+                    ) : (
+                      <span className="text-sky-300">
+                        ● Matches asking price
+                      </span>
+                    )}
+                  </span>
+                </div>
+              );
+            })()}
+          </div>
+
+          {/* Pricing Rule Clarification (Requirement 3: Prices only changed by market not by farmer) */}
+          <div className="mt-2 px-3 py-1.5 rounded-xl bg-stone-900 border border-stone-800 flex items-center justify-between text-[10px] text-stone-400">
+            <span className="flex items-center gap-1">
+              <span className="text-amber-400 font-bold">🏛️ Mandi Benchmarks:</span>
+              <span>Official prices changed exclusively by APMC Market (every 8 min). Farmer sets asking price.</span>
+            </span>
+            <span className="text-emerald-400 font-mono font-bold shrink-0">8-Min Cycle</span>
+          </div>
+
+          {/* Advisory when Market Buying Price is LESS than Farmer's Asking Price */}
+          {(() => {
+            const marketBuyingPrice = getMarketBuyingPriceForCrop(crop, markets);
+            if (marketBuyingPrice < crop.expectedPrice && isOwner) {
+              return (
+                <div className="mt-2 p-3 rounded-2xl bg-rose-950/40 border border-rose-500/50 text-xs space-y-1.5">
+                  <div className="flex items-center gap-1.5 text-rose-300 font-extrabold text-xs">
+                    <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
+                    <span>
+                      {language === 'te'
+                        ? `మార్కెట్ కొనుగోలు ధర మీ ఆశించిన ధర కంటే కిలోకు ₹${crop.expectedPrice - marketBuyingPrice} తక్కువగా ఉంది`
+                        : `Market Buying Price is ₹${crop.expectedPrice - marketBuyingPrice}/kg LESS than your asking price`}
+                    </span>
+                  </div>
+                  <p className="text-[11px] text-stone-300 leading-relaxed">
+                    Local APMC is buying at ₹{marketBuyingPrice}/kg. You can adjust your price to match the current market rate for instant deals, or check which other regional mandis pay higher net returns.
+                  </p>
+                  <div className="flex items-center gap-2 pt-1">
+                    <button
+                      onClick={() => {
+                        updateCrop(crop.id, { expectedPrice: marketBuyingPrice }, currentUser?.name);
+                        setToastMessage(`Asking price updated to match Mandi buying rate: ₹${marketBuyingPrice}/kg!`);
+                        setTimeout(() => setToastMessage(null), 3500);
+                      }}
+                      className="py-1.5 px-3 rounded-xl bg-rose-600 hover:bg-rose-500 text-white font-extrabold text-xs transition cursor-pointer shadow-sm"
+                    >
+                      Match Mandi Price (₹{marketBuyingPrice}/kg)
+                    </button>
+                    <button
+                      onClick={() => setShowTransportModal(true)}
+                      className="py-1.5 px-3 rounded-xl bg-stone-900 hover:bg-stone-850 text-amber-300 border border-amber-500/40 font-bold text-xs transition cursor-pointer"
+                    >
+                      Compare Regional Mandis →
+                    </button>
+                  </div>
+                </div>
+              );
+            }
+            return null;
+          })()}
+        </div>
+
+        {/* Real-Time Quantity Gauge (Requirement 13: Pre-booking & Reserved Quantity) */}
         <div className="p-4 pt-1 space-y-2">
-          <div className="p-3 rounded-2xl bg-stone-950/80 border border-stone-800 space-y-2">
+          <div className="p-3.5 rounded-2xl bg-stone-950/90 border border-stone-800 space-y-2.5">
             <div className="flex items-center justify-between text-xs">
               <span className="text-stone-400">
-                Total Qty: <strong className="text-white">{crop.totalQuantity.toLocaleString('en-IN')} kg</strong>
+                Total: <strong className="text-white">{crop.totalQuantity.toLocaleString('en-IN')} kg</strong>
               </span>
-              <span className="text-amber-400">
-                Pre-booked: <strong>{crop.preBookedQuantity.toLocaleString('en-IN')} kg</strong>
+              <span className="text-amber-400 font-semibold flex items-center gap-1">
+                {crop.preBookedQuantity > 0 && <Lock className="w-3 h-3 text-amber-400" />}
+                <span>Booked: <strong>{crop.preBookedQuantity.toLocaleString('en-IN')} kg</strong></span>
               </span>
-              <span className="text-emerald-400 font-bold">
-                Remaining: <strong>{crop.remainingQuantity.toLocaleString('en-IN')} kg</strong>
+              <span className="text-emerald-400 font-black bg-emerald-950/60 border border-emerald-500/40 px-2 py-0.5 rounded-lg">
+                Available: {crop.remainingQuantity.toLocaleString('en-IN')} kg
               </span>
             </div>
+
+            {/* Reserved badge if pre-booked (Requirement 13: 🔒 400 kg Reserved) */}
+            {crop.preBookedQuantity > 0 && (
+              <div className="p-2 rounded-xl bg-amber-950/40 border border-amber-500/40 flex items-center justify-between text-xs">
+                <span className="text-amber-300 font-extrabold flex items-center gap-1.5 text-xs">
+                  <Lock className="w-3.5 h-3.5 text-amber-400" />
+                  <span>🔒 {crop.preBookedQuantity.toLocaleString('en-IN')} kg Reserved</span>
+                </span>
+                <span className="text-[10px] text-stone-400">
+                  Protected from double-booking
+                </span>
+              </div>
+            )}
 
             <div className="w-full h-2 rounded-full bg-stone-800 overflow-hidden flex">
               <div
                 className="h-full bg-amber-500"
                 style={{ width: `${(crop.preBookedQuantity / crop.totalQuantity) * 100}%` }}
-                title="Pre-booked quantity"
+                title="Pre-booked reserved quantity"
               ></div>
               <div
                 className="h-full bg-emerald-500"
@@ -228,6 +356,15 @@ export const CropDetailPage: React.FC<CropDetailPageProps> = ({
                 title="Available remaining quantity"
               ></div>
             </div>
+
+            {/* Quick Transport Net Return Estimator Button (Requirements 7 & 8) */}
+            <button
+              onClick={() => setShowTransportModal(true)}
+              className="w-full py-2 px-3 rounded-xl bg-stone-900 hover:bg-stone-850 text-emerald-300 border border-emerald-500/30 text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer mt-1"
+            >
+              <Truck className="w-3.5 h-3.5 text-emerald-400" />
+              <span>🚛 Compare Mandi Net Returns & Transport Freight</span>
+            </button>
           </div>
         </div>
       </div>
@@ -318,8 +455,11 @@ export const CropDetailPage: React.FC<CropDetailPageProps> = ({
                   <div>
                     <span className="text-[10px] font-mono text-emerald-400 font-bold">{d.dealNumber}</span>
                     <p className="font-bold text-white text-xs mt-0.5">
-                      {d.buyerName} • {d.quantity} kg @ ₹{d.agreedPrice}/kg
+                      {d.buyerName} • {d.quantity.toLocaleString('en-IN')} kg
                     </p>
+                    <span className="text-[10px] text-amber-300 font-semibold block">
+                      {language === 'te' ? 'కుదిరిన ధర' : 'NEGOTIATED PRICE'}: ₹{d.agreedPrice}/kg
+                    </span>
                   </div>
                   <span className="text-xs font-bold text-emerald-400">
                     ₹{d.totalAmount.toLocaleString('en-IN')} →
@@ -331,14 +471,14 @@ export const CropDetailPage: React.FC<CropDetailPageProps> = ({
         </div>
       )}
 
-      {/* TAB 2: BUYER REQUESTS & 1-HOUR RESPONSE TIMER (Section 17, 18, 19) */}
+      {/* TAB 2: BUYER REQUESTS & 24-HOUR RESPONSE TIMER */}
       {activeTab === 'REQUESTS' && (
         <div className="space-y-3 text-xs">
           {cropRequests.length === 0 ? (
             <div className="p-8 rounded-3xl bg-stone-900 border border-stone-800 text-center space-y-2">
               <p className="text-stone-400">No purchase requests received for this crop yet.</p>
               <p className="text-[11px] text-stone-500">
-                Buyers from APMC markets can view your video and send requests.
+                Buyers from APMC markets can view your video and send requests (24-hour response window).
               </p>
             </div>
           ) : (
@@ -354,89 +494,158 @@ export const CropDetailPage: React.FC<CropDetailPageProps> = ({
                       : 'bg-stone-900/60 border-stone-800 text-stone-400'
                   }`}
                 >
-                  {/* Buyer & 1-Hour Window Header */}
-                  <div className="flex items-start justify-between">
+                  {/* Buyer & Verification Status */}
+                  <div className="flex items-start justify-between border-b border-stone-850 pb-2">
                     <div>
-                      <div className="flex items-center gap-1">
-                        <span className="font-bold text-white text-sm">{req.buyerName}</span>
-                        <ShieldCheck className="w-3.5 h-3.5 text-emerald-400" />
+                      <div className="flex items-center gap-1.5">
+                        <span className="font-extrabold text-white text-sm">{req.buyerMarketName}</span>
+                        <span className="text-[10px] bg-emerald-950/80 text-emerald-300 border border-emerald-500/30 px-2 py-0.5 rounded-full font-bold">
+                          🟢 Verified Buyer
+                        </span>
                       </div>
-                      <span className="text-[11px] text-stone-400">{req.buyerMarketName}</span>
+                      <span className="text-[11px] text-stone-400 block mt-0.5">{req.buyerName} • +91 {req.buyerPhone}</span>
                     </div>
 
                     {isPending ? (
                       <div className="text-right">
-                        <div className="flex items-center gap-1 text-amber-400 font-mono text-xs font-bold bg-amber-500/10 px-2 py-0.5 rounded-full border border-amber-500/20">
-                          <Clock className="w-3 h-3" />
-                          <span>42m left</span>
+                        <div className="flex items-center gap-1 text-amber-400 font-mono text-xs font-bold bg-amber-500/10 px-2.5 py-1 rounded-full border border-amber-500/30">
+                          <Clock className="w-3.5 h-3.5" />
+                          <span>⏱ Farmer to Buyer: 24 hours.</span>
                         </div>
-                        <span className="text-[9px] text-stone-500 block mt-0.5">1-hr response window</span>
+                        <span className="text-[10px] text-stone-500 block mt-0.5">24-hr response window active</span>
+                      </div>
+                    ) : req.status === 'EXPIRED' ? (
+                      <div className="text-right space-y-1">
+                        <span className="text-[10px] bg-rose-950/80 text-rose-300 border border-rose-800 px-2 py-0.5 rounded-full font-bold uppercase">
+                          24h Expired
+                        </span>
+                        <div className="text-[11px] text-rose-300 font-medium">
+                          Request expired — Send Request Again
+                        </div>
                       </div>
                     ) : (
                       <span
                         className={`text-[10px] font-bold px-2 py-0.5 rounded-full uppercase ${
                           req.status === 'ACCEPTED'
-                            ? 'bg-emerald-500/20 text-emerald-300'
-                            : 'bg-rose-500/20 text-rose-300'
+                            ? 'bg-emerald-500/20 text-emerald-300 border border-emerald-500/30'
+                            : 'bg-rose-500/20 text-rose-300 border border-rose-500/30'
                         }`}
                       >
-                        {req.status}
+                        {req.status === 'ACCEPTED' ? 'Deal Confirmed' : req.status}
                       </span>
                     )}
                   </div>
 
-                  {/* Quantity & Offered Price */}
+                  {/* Crop & Grade Headline (Requirement 14 Example: 🍅 Tomato — Grade A) */}
+                  <div className="flex items-center justify-between text-xs bg-stone-950 p-2.5 rounded-xl border border-stone-850">
+                    <span className="font-black text-white flex items-center gap-1.5">
+                      <span>{getCropEmoji(crop.cropName)}</span>
+                      <span>{crop.cropName} — Grade {crop.grade}</span>
+                    </span>
+                    <span className="text-[11px] text-stone-400">
+                      Total Lot: {crop.totalQuantity} kg
+                    </span>
+                  </div>
+
+                  {/* Requested Quantity & Offered Price Grid (Requirement 14) */}
                   <div className="grid grid-cols-2 gap-2 p-2.5 rounded-2xl bg-stone-950 border border-stone-800">
                     <div>
-                      <span className="text-[10px] text-stone-500 uppercase font-bold block">Requested Qty</span>
-                      <span className="text-white font-extrabold text-sm">{req.requestedQuantity} kg</span>
+                      <span className="text-[10px] text-stone-500 uppercase font-bold block">Requested Quantity</span>
+                      <span className="text-white font-extrabold text-sm">{req.requestedQuantity.toLocaleString('en-IN')} kg</span>
                     </div>
                     <div>
-                      <span className="text-[10px] text-stone-500 uppercase font-bold block">Offered Rate</span>
-                      <span className="text-emerald-400 font-extrabold text-sm">₹{req.offeredPrice}/kg</span>
+                      <span className="text-[10px] text-sky-400 uppercase font-black block tracking-wider">
+                        {language === 'te' ? 'ఆఫర్ చేసిన ధర (Offer)' : 'OFFERED PRICE'}
+                      </span>
+                      <span className="text-sky-300 font-black text-sm">₹{req.offeredPrice}/kg</span>
                     </div>
                   </div>
 
-                  {req.notes && (
-                    <p className="text-[11px] text-stone-300 italic bg-stone-950/60 p-2 rounded-xl">
-                      "{req.notes}"
+                  {/* Pickup / Delivery Information (Requirement 14) */}
+                  <div className="p-2.5 rounded-xl bg-stone-950/80 border border-stone-850 text-[11px] text-stone-300 space-y-1">
+                    <span className="text-[9px] uppercase font-bold text-stone-500 block">Pickup / Delivery Information</span>
+                    <p className="text-stone-200 font-medium">
+                      🚚 Farm gate collection arranged (3-ton Bolero scheduled upon acceptance).
                     </p>
-                  )}
+                  </div>
 
-                  {/* Accept / Reject actions (Only Farmer owner can accept) */}
-                  {isPending && isOwner && (
-                    <div className="flex items-center gap-2 pt-1">
-                      <button
-                        onClick={() => rejectCropRequest(req.id, 'Price mismatch')}
-                        className="flex-1 py-2.5 rounded-xl bg-stone-800 hover:bg-stone-750 text-rose-400 font-semibold transition"
-                      >
-                        Decline
-                      </button>
-                      <button
-                        onClick={() => {
-                          const res = acceptCropRequest(req.id);
-                          if (res.success && res.deal) {
-                            alert(`Booking Accepted! Deal ${res.deal.dealNumber} confirmed.`);
-                          } else {
-                            alert(res.error || 'Failed to accept booking.');
-                          }
-                        }}
-                        className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-stone-950 font-black shadow-md shadow-emerald-950/40 transition flex items-center justify-center gap-1.5"
-                      >
-                        <Check className="w-4 h-4 stroke-[3]" />
-                        <span>Accept & Pre-Book</span>
-                      </button>
+                  {/* Buyer Message (Requirement 14) */}
+                  {req.notes && (
+                    <div className="p-2.5 rounded-xl bg-stone-950/60 border border-stone-850 text-[11px] space-y-0.5">
+                      <span className="text-[9px] uppercase font-bold text-stone-500 block">Buyer Message</span>
+                      <p className="text-stone-300 italic">"{req.notes}"</p>
                     </div>
                   )}
 
-                  {/* Communication button */}
-                  <button
-                    onClick={() => onNavigateToChat(req.buyerId)}
-                    className="w-full py-2 rounded-xl bg-stone-800 hover:bg-stone-750 text-stone-300 text-[11px] font-semibold flex items-center justify-center gap-1.5 transition"
-                  >
-                    <MessageSquare className="w-3.5 h-3.5 text-sky-400" />
-                    <span>Chat with {req.buyerName.split(' ')[0]}</span>
-                  </button>
+                  {/* Buyer Reliability Card (Requirement 19) */}
+                  <div className="p-2.5 rounded-xl bg-emerald-950/30 border border-emerald-500/30 text-[11px] space-y-1">
+                    <div className="flex items-center justify-between text-emerald-300 font-bold">
+                      <span className="flex items-center gap-1">
+                        <Star className="w-3.5 h-3.5 fill-amber-400 text-amber-400" />
+                        <span>Buyer Reliability: 4.8 / 5</span>
+                      </span>
+                      <span className="text-[10px] text-stone-400">APMC Registered</span>
+                    </div>
+                    <div className="flex items-center justify-between text-[10px] text-stone-400 pt-0.5 border-t border-stone-800/60">
+                      <span>Completed transactions: <strong className="text-white">126</strong></span>
+                      <span>Cancellation rate: <strong className="text-emerald-400">1.8%</strong></span>
+                    </div>
+                  </div>
+
+                  {/* Buttons: ACCEPT, REJECT, CHAT (Requirement 14) */}
+                  <div className="grid grid-cols-3 gap-2 pt-1">
+                    {isPending && isOwner ? (
+                      <>
+                        <button
+                          onClick={() => rejectCropRequest(req.id, 'Price mismatch')}
+                          className="py-2.5 rounded-xl bg-stone-800 hover:bg-stone-750 text-rose-400 font-bold text-xs transition text-center cursor-pointer"
+                        >
+                          REJECT
+                        </button>
+                        <button
+                          onClick={() => {
+                            const res = acceptCropRequest(req.id);
+                            if (res.success && res.deal) {
+                              alert(`Booking Accepted! Deal ${res.deal.dealNumber} confirmed.`);
+                            } else {
+                              alert(res.error || 'Failed to accept booking.');
+                            }
+                          }}
+                          className="py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-stone-950 font-black text-xs shadow-md shadow-emerald-950/40 transition text-center cursor-pointer flex items-center justify-center gap-1"
+                        >
+                          <Check className="w-3.5 h-3.5 stroke-[3]" />
+                          <span>ACCEPT</span>
+                        </button>
+                      </>
+                    ) : req.status === 'EXPIRED' ? (
+                      <div className="col-span-2 flex items-center gap-2">
+                        <button
+                          onClick={() => {
+                            const res = resendCropRequest(req.id);
+                            if (res.success) {
+                              alert('Request renewed! 24-hour window restarted.');
+                            }
+                          }}
+                          className="flex-1 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-stone-950 font-bold text-xs flex items-center justify-center gap-1.5 cursor-pointer shadow-md"
+                        >
+                          <RefreshCw className="w-3.5 h-3.5" />
+                          <span>Send Request Again</span>
+                        </button>
+                      </div>
+                    ) : (
+                      <div className="col-span-2 text-[11px] text-stone-500 flex items-center">
+                        Request has been processed ({req.status}).
+                      </div>
+                    )}
+
+                    <button
+                      onClick={() => onNavigateToChat(req.buyerId)}
+                      className="py-2.5 rounded-xl bg-sky-950/70 hover:bg-sky-900/70 text-sky-300 border border-sky-500/40 text-xs font-bold transition flex items-center justify-center gap-1 cursor-pointer"
+                    >
+                      <MessageSquare className="w-3.5 h-3.5" />
+                      <span>CHAT</span>
+                    </button>
+                  </div>
                 </div>
               );
             })
@@ -552,6 +761,23 @@ export const CropDetailPage: React.FC<CropDetailPageProps> = ({
             </form>
           </div>
         </div>
+      )}
+      {/* Toast Notification */}
+      {toastMessage && (
+        <div className="fixed bottom-20 left-4 right-4 z-50 flex justify-center pointer-events-none animate-in fade-in slide-in-from-bottom-2">
+          <div className="bg-emerald-950 border border-emerald-500/80 text-emerald-200 px-4 py-2.5 rounded-2xl shadow-2xl text-xs font-bold flex items-center gap-2">
+            <CheckCircle className="w-4 h-4 text-emerald-400 shrink-0" />
+            <span>{toastMessage}</span>
+          </div>
+        </div>
+      )}
+
+      {/* Transport & Net Return Modal (Requirements 7 & 8) */}
+      {showTransportModal && (
+        <TransportNetReturnModal
+          crop={crop}
+          onClose={() => setShowTransportModal(false)}
+        />
       )}
     </div>
   );

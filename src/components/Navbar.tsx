@@ -1,13 +1,19 @@
 import React, { useState } from 'react';
 import { useApp } from '../context/AppContext';
-import { Bell, Volume2, VolumeX, Globe, ArrowLeftRight, UserCheck } from 'lucide-react';
+import { Bell, Volume2, VolumeX, Globe, ArrowLeftRight, UserCheck, Clock } from 'lucide-react';
+import { formatTimerCountdown } from '../utils/marketCycleEngine';
 
 interface NavbarProps {
   onOpenNotifications: () => void;
   onSelectLanguage: () => void;
+  onOpenTimerDetails: () => void;
 }
 
-export const Navbar: React.FC<NavbarProps> = ({ onOpenNotifications, onSelectLanguage }) => {
+export const Navbar: React.FC<NavbarProps> = ({
+  onOpenNotifications,
+  onSelectLanguage,
+  onOpenTimerDetails,
+}) => {
   const {
     currentUser,
     switchRole,
@@ -19,7 +25,10 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenNotifications, onSelectLan
     stopSpeaking,
     crops,
     markets,
+    marketTimerSecondsLeft,
   } = useApp();
+
+  const timerInfo = formatTimerCountdown(marketTimerSecondsLeft);
 
   const [roleMenuOpen, setRoleMenuOpen] = useState(false);
 
@@ -72,7 +81,7 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenNotifications, onSelectLan
             🌱
           </div>
           <div>
-            <div className="flex items-center gap-1.5">
+            <div className="flex items-center gap-1.5 flex-wrap">
               <h1 className="font-bold text-base tracking-tight text-white leading-none">
                 {t('appName')}
               </h1>
@@ -86,8 +95,19 @@ export const Navbar: React.FC<NavbarProps> = ({ onOpenNotifications, onSelectLan
           </div>
         </div>
 
-        {/* Actions Bar */}
+        {/* Upside Corner Actions Bar */}
         <div className="flex items-center gap-1.5">
+          {/* Upside Corner Timer: Shows TIMER ONLY (no other details), click opens details modal */}
+          <button
+            onClick={onOpenTimerDetails}
+            className="flex items-center gap-1.5 px-2.5 py-1.5 bg-emerald-950/90 hover:bg-emerald-900 border border-emerald-500/50 hover:border-emerald-400 rounded-xl text-emerald-300 hover:text-emerald-200 text-xs font-mono font-bold transition shadow-sm cursor-pointer active:scale-95"
+            title={language === 'te' ? '8 నిమిషాల టైమర్ - వివరాల కోసం క్లిక్ చేయండి' : '8-Minute Timer - Click to see what happens after timer'}
+            aria-label="8-minute market countdown timer"
+          >
+            <Clock className="w-3.5 h-3.5 text-emerald-400 animate-pulse shrink-0" />
+            <span className="tracking-wider">{timerInfo.formatted}</span>
+          </button>
+
           {/* Read Aloud Voice Button (crucial for farmers) */}
           <button
             onClick={handleAudioPricing}

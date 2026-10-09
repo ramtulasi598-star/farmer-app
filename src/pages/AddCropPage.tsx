@@ -34,7 +34,7 @@ const COMMON_CROPS = [
 ];
 
 export const AddCropPage: React.FC<AddCropPageProps> = ({ onSuccess, onCancel }) => {
-  const { currentUser, addCrop, t, language } = useApp();
+  const { currentUser, markets, addCrop, t, language } = useApp();
 
   const [cropName, setCropName] = useState('Tomato (టమాటా - Hybrid Sahu)');
   const [cropCategory, setCropCategory] = useState('Tomato');
@@ -200,8 +200,60 @@ export const AddCropPage: React.FC<AddCropPageProps> = ({ onSuccess, onCancel })
               onChange={e => setExpectedPrice(Number(e.target.value))}
               className="w-full px-3.5 py-2.5 bg-stone-950 border border-stone-800 rounded-2xl text-sm font-bold text-emerald-400 focus:outline-none focus:border-emerald-500"
             />
+            {(() => {
+              const cat = cropCategory.toLowerCase();
+              let mandiRate = 28;
+              for (const m of markets) {
+                for (const req of m.cropsRequired) {
+                  if (req.cropName.toLowerCase().includes(cat)) {
+                    mandiRate = req.buyingPrice;
+                    break;
+                  }
+                }
+              }
+              if (cat.includes('potato')) mandiRate = 25;
+              if (cat.includes('chilli')) mandiRate = 195;
+              if (cat.includes('rice')) mandiRate = 23;
+              if (cat.includes('onion')) mandiRate = 28;
+
+              const isMandiLess = mandiRate < expectedPrice;
+              const diff = Math.abs(expectedPrice - mandiRate);
+
+              return (
+                <div className="mt-2 p-2.5 rounded-xl bg-stone-950 border border-stone-850 space-y-1.5">
+                  <div className="flex items-center justify-between text-[11px]">
+                    <span className="text-stone-400">Market Buying Price:</span>
+                    <span className="font-extrabold text-amber-300">₹{mandiRate}/kg</span>
+                  </div>
+                  <div className="text-[10px]">
+                    {isMandiLess ? (
+                      <span className="text-rose-400 font-bold block">
+                        ▼ Market buying price is ₹{diff}/kg LESS than your asking price
+                      </span>
+                    ) : mandiRate > expectedPrice ? (
+                      <span className="text-emerald-400 font-bold block">
+                        ▲ Market buying price is ₹{diff}/kg higher than your asking price
+                      </span>
+                    ) : (
+                      <span className="text-sky-300 font-bold block">
+                        ● Market buying price matches your asking price
+                      </span>
+                    )}
+                  </div>
+                  {expectedPrice !== mandiRate && (
+                    <button
+                      type="button"
+                      onClick={() => setExpectedPrice(mandiRate)}
+                      className="text-[10px] text-amber-300 hover:text-amber-200 underline font-semibold block pt-0.5 cursor-pointer"
+                    >
+                      Match Market Buying Price (₹{mandiRate}/kg)
+                    </button>
+                  )}
+                </div>
+              );
+            })()}
             <span className="text-[10px] text-stone-400 block mt-1.5">
-              Total: ≈ ₹{(totalQuantity * expectedPrice).toLocaleString('en-IN')}
+              Total Value: ≈ ₹{(totalQuantity * expectedPrice).toLocaleString('en-IN')}
             </span>
           </div>
         </div>
